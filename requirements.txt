@@ -1,12 +1,10 @@
 streamlit
 pandas
 numpy
-prophet
+prophet==1.1.5
 scikit-learn
 xgboost
 matplotlib
-shap
-plotly
-pyvis
 seaborn
-fpdf
+plotly
+networkx
