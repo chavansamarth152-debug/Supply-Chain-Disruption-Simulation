@@ -1,196 +1,194 @@
+# =========================
+# AI SUPPLY CHAIN DSS APP
+# =========================
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-from prophet import Prophet
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-import xgboost as xgb
-from sklearn.model_selection import TimeSeriesSplit
-import matplotlib.pyplot as plt
-import plotly.graph_objs as go
-import networkx as nx
-import seaborn as sns
-import json
-import io
-from datetime import timedelta
+from sklearn.linear_model import LinearRegression
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+import plotly.express as px
 
 st.set_page_config(layout="wide")
-st.title("📈 AI Supply Chain Forecast & Simulation")
+st.title("🚀 AI-Powered Supply Chain DSS")
 
 # =========================
-# FILE UPLOAD
+# DATA GENERATION
 # =========================
-st.sidebar.header("Upload Data")
-uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+@st.cache_data
+def generate_data():
+    np.random.seed(42)
+    data = pd.DataFrame({
+        "supplier_id": np.arange(1, 101),
+        "location": np.random.choice(["India", "China", "USA"], 100),
+        "reliability": np.random.uniform(0.7, 1.0, 100),
+        "inventory": np.random.randint(100, 500, 100),
+        "demand": np.random.randint(80, 400, 100),
+        "transport_cost": np.random.randint(100, 500, 100),
+        "lead_time": np.random.randint(1, 10, 100),
+        "product_cost": np.random.randint(50, 200, 100)
+    })
+    return data
 
-if uploaded_file:
-    df_raw = pd.read_csv(uploaded_file)
-else:
-    st.warning("Please upload a CSV file")
-    st.stop()
-
-required_cols = {'product_id', 'date', 'sales'}
-if not required_cols.issubset(df_raw.columns):
-    st.error("CSV must contain: product_id, date, sales")
-    st.stop()
-
-# =========================
-# DATA PREP
-# =========================
-product_id = st.sidebar.selectbox("Select Product", df_raw['product_id'].unique())
-
-df = df_raw[df_raw['product_id'] == product_id][['date', 'sales']]
-df.columns = ['ds', 'y']
-df['ds'] = pd.to_datetime(df['ds'])
-
-forecast_days = st.sidebar.slider("Forecast Days", 7, 180, 30)
+df = generate_data()
 
 # =========================
-# MODELS
+# PREPROCESSING
 # =========================
-@st.cache_resource
-def train_prophet(df):
-    model = Prophet()
-    model.fit(df)
-    return model
-
-@st.cache_resource
-def train_xgb(df):
-    df = df.set_index('ds').resample('D').sum().fillna(0)
-    df['lag1'] = df['y'].shift(1)
-    df.dropna(inplace=True)
-
-    X = df[['lag1']]
-    y = df['y']
-
-    model = xgb.XGBRegressor()
-    model.fit(X, y)
-    return model, df
-
-# =========================
-# TRAIN
-# =========================
-with st.spinner("Training models..."):
-    prophet_model = train_prophet(df.copy())
-    xgb_model, df_xgb = train_xgb(df.copy())
-
-# =========================
-# FORECAST
-# =========================
-st.header("📊 Forecast")
-
-# Prophet Forecast
-future = prophet_model.make_future_dataframe(periods=forecast_days)
-forecast = prophet_model.predict(future)
-
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat'], name="Forecast"))
-st.plotly_chart(fig, use_container_width=True)
-
-# =========================
-# SIMPLE METRICS
-# =========================
-true = df['y'].tail(20)
-pred = forecast['yhat'].tail(20)
-
-mae = mean_absolute_error(true, pred)
-rmse = np.sqrt(mean_squared_error(true, pred))
-
-st.metric("MAE", f"{mae:.2f}")
-st.metric("RMSE", f"{rmse:.2f}")
-
-# =========================
-# SUPPLY CHAIN GRAPH
-# =========================
-st.header("🚧 Supply Chain Simulation")
-
-default_graph = {
-    "nodes": ["Factory", "Port", "Warehouse"],
-    "edges": [
-        ("Factory", "Port", 5),
-        ("Port", "Warehouse", 3)
-    ]
-}
-
-G = nx.DiGraph()
-for n in default_graph["nodes"]:
-    G.add_node(n)
-
-for u, v, d in default_graph["edges"]:
-    G.add_edge(u, v, transit_days=d)
-
-# Delay sliders
-for edge in G.edges:
-    G.edges[edge]['transit_days'] = st.slider(
-        f"{edge[0]} ➜ {edge[1]} delay",
-        1, 20, G.edges[edge]['transit_days']
+def preprocess(df):
+    df = df.copy()
+    df["risk_score"] = (1 - df["reliability"]) * df["lead_time"]
+    scaler = StandardScaler()
+    df[["inventory","demand","transport_cost"]] = scaler.fit_transform(
+        df[["inventory","demand","transport_cost"]]
     )
+    return df
+
+df_processed = preprocess(df)
 
 # =========================
-# HEATMAP
+# ML MODELS
 # =========================
-def compute_matrix(G):
-    nodes = list(G.nodes)
-    matrix = pd.DataFrame(index=nodes, columns=nodes)
+def train_models(df):
+    X = df[["inventory","transport_cost","lead_time","reliability"]]
+    y_demand = df["demand"]
+    y_delay = df["lead_time"]
+    y_risk = (df["risk_score"] > df["risk_score"].median()).astype(int)
 
-    for i in nodes:
-        for j in nodes:
-            if i != j:
-                try:
-                    path = nx.shortest_path(G, i, j, weight='transit_days')
-                    delay = sum(G[u][v]['transit_days'] for u, v in zip(path[:-1], path[1:]))
-                    matrix.loc[i, j] = delay
-                except:
-                    matrix.loc[i, j] = None
-    return matrix
+    demand_model = LinearRegression().fit(X, y_demand)
+    delay_model = DecisionTreeRegressor().fit(X, y_delay)
+    risk_model = RandomForestClassifier().fit(X, y_risk)
 
-heat = compute_matrix(G)
+    return demand_model, delay_model, risk_model
 
-st.subheader("Delay Heatmap")
-fig, ax = plt.subplots()
-sns.heatmap(heat.astype(float), annot=True, cmap="Reds", ax=ax)
-st.pyplot(fig)
+demand_model, delay_model, risk_model = train_models(df_processed)
 
 # =========================
-# COST SIMULATION
+# UI INPUTS
 # =========================
-st.header("💰 Cost Simulation")
+st.sidebar.header("⚙️ Scenario Controls")
 
-distance = st.number_input("Distance (km)", 0.0)
-cost_km = st.number_input("Cost per km", 0.0)
-qty = st.number_input("Quantity", 0.0)
+scenario = st.sidebar.selectbox("Select Scenario", [
+    "Normal",
+    "Flood (Supplier Delay)",
+    "Demand Spike",
+    "Transport Strike"
+])
 
-cost = distance * cost_km * qty
-st.metric("Total Cost", f"${cost:.2f}")
-
-# =========================
-# MONTE CARLO
-# =========================
-st.header("🎲 Risk Simulation")
-
-runs = st.slider("Simulation Runs", 100, 500, 200)
-prob = st.slider("Disruption Probability", 0.0, 1.0, 0.3)
-
-delays = []
-
-for _ in range(runs):
-    total = 0
-    for edge in G.edges:
-        d = G.edges[edge]['transit_days']
-        if np.random.rand() < prob:
-            d += np.random.randint(1, 5)
-        total += d
-    delays.append(total)
-
-fig2, ax2 = plt.subplots()
-sns.histplot(delays, bins=20, kde=True, ax=ax2)
-st.pyplot(fig2)
+demand_increase = st.sidebar.slider("Demand Increase %", 0, 100, 20)
+delay_days = st.sidebar.slider("Delay Days", 0, 10, 3)
+cost_increase = st.sidebar.slider("Cost Increase %", 0, 100, 25)
 
 # =========================
-# DOWNLOAD
+# SIMULATION ENGINE
 # =========================
-st.header("⬇️ Download Forecast")
+def simulate(df, scenario):
+    df = df.copy()
 
-download_df = forecast[['ds', 'yhat']]
-csv = download_df.to_csv(index=False)
+    if scenario == "Flood (Supplier Delay)":
+        df["lead_time"] += delay_days
 
-st.download_button("Download CSV", csv, "forecast.csv", "text/csv")
+    elif scenario == "Demand Spike":
+        df["demand"] *= (1 + demand_increase/100)
+
+    elif scenario == "Transport Strike":
+        df["transport_cost"] *= (1 + cost_increase/100)
+
+    return df
+
+df_sim = simulate(df_processed, scenario)
+
+# =========================
+# PREDICTIONS
+# =========================
+X_sim = df_sim[["inventory","transport_cost","lead_time","reliability"]]
+
+pred_demand = demand_model.predict(X_sim)
+pred_delay = delay_model.predict(X_sim)
+pred_risk = risk_model.predict(X_sim)
+
+df_sim["predicted_demand"] = pred_demand
+df_sim["predicted_delay"] = pred_delay
+df_sim["risk"] = pred_risk
+
+# =========================
+# DECISION ENGINE
+# =========================
+def decisions(df):
+    rec = []
+
+    if df["risk"].mean() > 0.5:
+        rec.append("🔴 High Risk: Switch supplier")
+
+    if df["predicted_delay"].mean() > 5:
+        rec.append("⏱ Use faster transport")
+
+    if df["predicted_demand"].mean() > df["inventory"].mean():
+        rec.append("📦 Increase inventory")
+
+    if not rec:
+        rec.append("✅ System Stable")
+
+    return rec
+
+recommendations = decisions(df_sim)
+
+# =========================
+# VISUALIZATION
+# =========================
+st.header("📊 Dashboard")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    fig1 = px.scatter(df_sim, x="inventory", y="predicted_demand",
+                      title="Demand vs Inventory")
+    st.plotly_chart(fig1, use_container_width=True)
+
+with col2:
+    fig2 = px.histogram(df_sim, x="predicted_delay",
+                        title="Delay Distribution")
+    st.plotly_chart(fig2, use_container_width=True)
+
+# Risk Heatmap
+st.subheader("🔥 Risk Heatmap")
+fig3 = px.density_heatmap(df_sim, x="inventory", y="predicted_demand")
+st.plotly_chart(fig3, use_container_width=True)
+
+# =========================
+# COST ANALYSIS
+# =========================
+st.header("💰 Cost Analysis")
+
+base_cost = df["transport_cost"].sum()
+new_cost = df_sim["transport_cost"].sum()
+
+st.metric("Original Cost", f"${base_cost:.2f}")
+st.metric("After Simulation", f"${new_cost:.2f}")
+st.metric("Cost Change", f"{(new_cost-base_cost):.2f}")
+
+# =========================
+# OUTPUT
+# =========================
+st.header("🧠 AI Decision Support")
+
+for r in recommendations:
+    st.success(r)
+
+risk_level = "Low"
+if df_sim["risk"].mean() > 0.6:
+    risk_level = "High"
+elif df_sim["risk"].mean() > 0.3:
+    risk_level = "Medium"
+
+st.subheader(f"⚠️ Risk Level: {risk_level}")
+
+# =========================
+# DOWNLOAD REPORT
+# =========================
+st.subheader("⬇️ Download Results")
+
+csv = df_sim.to_csv(index=False)
+st.download_button("Download CSV", csv, "results.csv")
