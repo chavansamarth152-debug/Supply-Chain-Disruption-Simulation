@@ -6,49 +6,71 @@ from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_squared_error, accuracy_score
 
 st.set_page_config(layout="wide")
 st.title("🚀 AI Supply Chain Disruption DSS")
 
 # =========================
-# DATA GENERATION
+# SAFE DATA LOADER
+# =========================
+def load_data(file):
+    try:
+        df = pd.read_csv(file)
+        return df
+    except:
+        return None
+
+# =========================
+# AUTO DATA GENERATOR
 # =========================
 def generate_data():
     np.random.seed(42)
-    data = pd.DataFrame({
-        "supplier_id": np.random.randint(1, 5, 200),
-        "location": np.random.choice(["North", "South", "East", "West"], 200),
-        "reliability": np.random.uniform(0.7, 1.0, 200),
-        "inventory": np.random.randint(50, 300, 200),
-        "demand": np.random.randint(40, 250, 200),
-        "transport_cost": np.random.randint(10, 100, 200),
-        "lead_time": np.random.randint(1, 10, 200)
+    df = pd.DataFrame({
+        "supplier_id": np.random.randint(1, 5, 100),
+        "inventory": np.random.randint(50, 300, 100),
+        "demand": np.random.randint(40, 250, 100),
+        "transport_cost": np.random.randint(10, 100, 100),
+        "lead_time": np.random.randint(1, 10, 100)
     })
-
-    data["delay"] = data["lead_time"] + np.random.randint(0, 5, 200)
-    data["risk"] = np.where(data["delay"] > 8, 1, 0)
-    return data
+    df["delay"] = df["lead_time"] + np.random.randint(0, 5, 100)
+    df["risk"] = (df["delay"] > 8).astype(int)
+    return df
 
 # =========================
 # LOAD DATA
 # =========================
-uploaded = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+st.sidebar.header("📂 Data Input")
+file = st.sidebar.file_uploader("Upload CSV (optional)", type=["csv"])
 
-if uploaded:
-    df = pd.read_csv(uploaded)
-else:
-    df = generate_data()
+df = load_data(file) if file else generate_data()
 
-st.subheader("📊 Data Preview")
+if df is None or df.empty:
+    st.error("❌ Failed to load data")
+    st.stop()
+
+# =========================
+# REQUIRED COLUMN CHECK
+# =========================
+required = ["inventory", "demand", "transport_cost", "lead_time"]
+for col in required:
+    if col not in df.columns:
+        df[col] = np.random.randint(10, 100, len(df))
+
+if "delay" not in df.columns:
+    df["delay"] = df["lead_time"] + np.random.randint(0, 5, len(df))
+
+if "risk" not in df.columns:
+    df["risk"] = (df["delay"] > 8).astype(int)
+
+st.subheader("📊 Dataset Preview")
 st.dataframe(df.head())
 
 # =========================
 # PREPROCESSING
 # =========================
-df.fillna(df.mean(numeric_only=True), inplace=True)
+df.fillna(0, inplace=True)
 
-X = df[["inventory", "demand", "transport_cost", "lead_time"]]
+X = df[required]
 y_delay = df["delay"]
 y_risk = df["risk"]
 
@@ -56,56 +78,53 @@ scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
 # =========================
-# ML MODELS
+# TRAIN MODELS (FAST)
 # =========================
-delay_model = DecisionTreeRegressor()
+delay_model = DecisionTreeRegressor(max_depth=5)
 delay_model.fit(X_scaled, y_delay)
 
-risk_model = RandomForestClassifier()
+risk_model = RandomForestClassifier(n_estimators=50)
 risk_model.fit(X_scaled, y_risk)
 
 demand_model = LinearRegression()
 demand_model.fit(df[["inventory"]], df["demand"])
 
 # =========================
-# UI INPUTS
+# UI CONTROLS
 # =========================
-st.sidebar.header("⚙️ Simulation Controls")
+st.sidebar.header("⚙️ Simulation")
 
-scenario = st.sidebar.selectbox("Select Scenario", [
+scenario = st.sidebar.selectbox("Scenario", [
     "Normal",
-    "Flood (Supplier Delay)",
+    "Flood (Delay)",
     "Demand Spike",
-    "Transport Strike"
+    "Transport Cost Increase"
 ])
 
-demand_increase = st.sidebar.slider("Demand Increase %", 0, 100, 20)
-delay_increase = st.sidebar.slider("Delay Increase Days", 0, 10, 3)
+demand_pct = st.sidebar.slider("Demand Increase %", 0, 100, 20)
+delay_days = st.sidebar.slider("Extra Delay Days", 0, 10, 3)
 
 # =========================
-# SIMULATION ENGINE
+# SIMULATION
 # =========================
 df_sim = df.copy()
 
-if scenario == "Flood (Supplier Delay)":
-    df_sim["lead_time"] += delay_increase
+if scenario == "Flood (Delay)":
+    df_sim["lead_time"] += delay_days
 
 elif scenario == "Demand Spike":
-    df_sim["demand"] += df_sim["demand"] * (demand_increase / 100)
+    df_sim["demand"] *= (1 + demand_pct / 100)
 
-elif scenario == "Transport Strike":
+elif scenario == "Transport Cost Increase":
     df_sim["transport_cost"] *= 1.5
 
 # =========================
 # PREDICTIONS
 # =========================
-X_sim = scaler.transform(df_sim[["inventory", "demand", "transport_cost", "lead_time"]])
+X_sim = scaler.transform(df_sim[required])
 
-pred_delay = delay_model.predict(X_sim)
-pred_risk = risk_model.predict(X_sim)
-
-df_sim["pred_delay"] = pred_delay
-df_sim["pred_risk"] = pred_risk
+df_sim["pred_delay"] = delay_model.predict(X_sim)
+df_sim["pred_risk"] = risk_model.predict(X_sim)
 
 # =========================
 # DECISION ENGINE
@@ -113,15 +132,15 @@ df_sim["pred_risk"] = pred_risk
 recommendations = []
 
 if df_sim["pred_risk"].mean() > 0.5:
-    recommendations.append("⚠️ High Risk → Use alternate supplier")
+    recommendations.append("⚠️ Switch Supplier")
 else:
-    recommendations.append("✅ Risk Low → Continue current plan")
+    recommendations.append("✅ System Stable")
 
 if df_sim["demand"].mean() > df["inventory"].mean():
-    recommendations.append("📦 Increase inventory levels")
+    recommendations.append("📦 Increase Inventory")
 
-if scenario == "Transport Strike":
-    recommendations.append("🚚 Change transport route")
+if scenario == "Transport Cost Increase":
+    recommendations.append("🚚 Optimize Route")
 
 # =========================
 # COST ANALYSIS
@@ -137,40 +156,34 @@ st.header("📈 Results")
 col1, col2, col3 = st.columns(3)
 col1.metric("Avg Delay", f"{df_sim['pred_delay'].mean():.2f}")
 col2.metric("Risk Level", "High" if df_sim["pred_risk"].mean() > 0.5 else "Low")
-col3.metric("Cost Change", f"{new_cost - base_cost:.2f}")
+col3.metric("Cost Impact", f"{new_cost - base_cost:.2f}")
 
 # =========================
-# VISUALIZATION
+# VISUALS (SAFE)
 # =========================
-st.subheader("📊 Demand vs Inventory")
-fig1 = px.scatter(df_sim, x="inventory", y="demand", color="pred_risk")
+st.subheader("Demand vs Inventory")
+fig1 = px.scatter(df_sim, x="inventory", y="demand", color=df_sim["pred_risk"].astype(str))
 st.plotly_chart(fig1, use_container_width=True)
 
-st.subheader("📊 Cost Comparison")
+st.subheader("Cost Comparison")
 cost_df = pd.DataFrame({
-    "Type": ["Before", "After"],
+    "Stage": ["Before", "After"],
     "Cost": [base_cost, new_cost]
 })
-fig2 = px.bar(cost_df, x="Type", y="Cost", color="Type")
+fig2 = px.bar(cost_df, x="Stage", y="Cost")
 st.plotly_chart(fig2, use_container_width=True)
-
-st.subheader("🔥 Risk Heatmap")
-heat = df_sim.pivot_table(values="pred_risk", index="supplier_id", columns="location")
-st.dataframe(heat)
 
 # =========================
 # RECOMMENDATIONS
 # =========================
-st.header("🧠 AI Recommendations")
-
-for rec in recommendations:
-    st.success(rec)
+st.header("🧠 AI Decisions")
+for r in recommendations:
+    st.success(r)
 
 # =========================
 # REPORT
 # =========================
-st.header("📄 Report Summary")
-
+st.header("📄 Report")
 st.write(f"""
 Scenario: {scenario}
 
@@ -179,7 +192,4 @@ Average Delay: {df_sim['pred_delay'].mean():.2f}
 Risk Level: {"High" if df_sim["pred_risk"].mean() > 0.5 else "Low"}
 
 Cost Change: {new_cost - base_cost:.2f}
-
-Recommendations:
-{chr(10).join(recommendations)}
 """)
