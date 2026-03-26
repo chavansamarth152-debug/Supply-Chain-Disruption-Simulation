@@ -2,13 +2,19 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 
+# PDF
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+
+# -------------------------------
+# UI
+# -------------------------------
 st.set_page_config(layout="wide")
-st.title("🚀 AI Supply Chain DSS with Monte Carlo Simulation")
+st.title("🚀 AI Supply Chain DSS (Final Version)")
 
 # -------------------------------
 # LOAD DATA
@@ -29,7 +35,7 @@ else:
     })
 
 # -------------------------------
-# SAFE COLUMN HANDLING
+# SAFE COLUMNS
 # -------------------------------
 def col(name, default):
     return df[name] if name in df.columns else pd.Series([default]*len(df))
@@ -45,21 +51,21 @@ if "Supplier_ID" not in df.columns:
     df["Supplier_ID"] = ["S"+str(i) for i in range(len(df))]
 
 # -------------------------------
-# ADD VARIATION (IMPORTANT FIX)
+# ADD VARIATION (KEY FIX)
 # -------------------------------
-df["Demand"] = df["Demand"] + np.random.randint(-50, 50, size=len(df))
-df["Lead_Time"] = df["Lead_Time"] + np.random.randint(-2, 2, size=len(df))
+df["Demand"] += np.random.randint(-50, 50, len(df))
+df["Lead_Time"] += np.random.randint(-2, 3, len(df))
 
 # -------------------------------
 # SIDEBAR
 # -------------------------------
-st.sidebar.header("Simulation")
+st.sidebar.header("⚙️ Simulation")
 
 scenario = st.sidebar.selectbox("Scenario", [
     "None", "Demand Spike", "Delay", "Cost Increase"
 ])
 
-demand_inc = st.sidebar.slider("Demand % Increase", 0, 100, 20)
+demand_inc = st.sidebar.slider("Demand Increase %", 0, 100, 20)
 delay = st.sidebar.slider("Delay Days", 0, 10, 2)
 
 # -------------------------------
@@ -75,109 +81,125 @@ if scenario == "Delay":
     sim["Lead_Time"] = sim["Lead_Time"] + delay
 
 if scenario == "Cost Increase":
-    sim["Transport_Cost"] *= 1.5
+    sim["Transport_Cost"] = sim["Transport_Cost"] * 1.5
 
 # -------------------------------
-# MONTE CARLO SIMULATION
+# DEMAND TREND (FIXED)
+# -------------------------------
+st.subheader("📈 Demand Trend")
+
+trend_df = pd.DataFrame({
+    "Original": original["Demand"],
+    "Simulated": sim["Demand"]
+})
+
+st.plotly_chart(px.line(trend_df))
+
+# -------------------------------
+# MONTE CARLO (FIXED PROPERLY)
 # -------------------------------
 st.subheader("🎲 Monte Carlo Simulation")
 
-runs = 100
+runs = 500
 results = []
 
 for i in range(runs):
     temp = sim.copy()
-    temp["Demand"] = temp["Demand"] * np.random.uniform(0.9, 1.2)
-    total_cost = (temp["Transport_Cost"] + temp["Product_Cost"]).sum()
-    results.append(total_cost)
+
+    temp["Demand"] *= np.random.normal(1.0, 0.2, len(temp))
+    temp["Lead_Time"] += np.random.randint(-2, 3, len(temp))
+    temp["Transport_Cost"] *= np.random.uniform(0.8, 1.5)
+
+    cost = (
+        temp["Transport_Cost"] +
+        temp["Product_Cost"] +
+        (temp["Demand"] * 0.05)
+    ).sum()
+
+    results.append(cost)
 
 mc_df = pd.DataFrame({"Cost": results})
 
-st.plotly_chart(px.histogram(mc_df, x="Cost", nbins=20))
+st.plotly_chart(px.histogram(mc_df, x="Cost", nbins=30))
 
-# -------------------------------
-# ML MODEL
-# -------------------------------
-rmse = 0
-try:
-    if len(df) > 3:
-        X = original[["Inventory","Lead_Time","Transport_Cost"]]
-        y = original["Demand"]
-
-        X_train, X_test, y_train, y_test = train_test_split(X, y)
-
-        model = LinearRegression()
-        model.fit(X_train, y_train)
-
-        pred = model.predict(X_test)
-        rmse = np.sqrt(mean_squared_error(y_test, pred))
-except:
-    pass
+st.write("Average Cost:", round(mc_df["Cost"].mean(),2))
+st.write("Max Cost:", round(mc_df["Cost"].max(),2))
+st.write("Min Cost:", round(mc_df["Cost"].min(),2))
 
 # -------------------------------
 # GRAPHS
 # -------------------------------
-
-st.subheader("📊 Histogram (Demand)")
+st.subheader("📊 Histogram")
 st.plotly_chart(px.histogram(sim, x="Demand"))
 
-st.subheader("📈 Line Graph (Demand Trend)")
-st.plotly_chart(px.line(sim, y="Demand"))
-
-st.subheader("🔥 Scatter Plot (Risk)")
+st.subheader("🔥 Scatter Plot")
 sim["Risk"] = (1 - sim["Reliability"]) * sim["Lead_Time"]
+st.plotly_chart(px.scatter(sim, x="Reliability", y="Lead_Time",
+                           size="Inventory", color="Risk"))
 
-st.plotly_chart(px.scatter(sim,
-                           x="Reliability",
-                           y="Lead_Time",
-                           size="Inventory",
-                           color="Risk"))
-
-st.subheader("🥧 Pie Chart (Cost Split)")
+st.subheader("🥧 Pie Chart")
 cost_df = pd.DataFrame({
-    "Type": ["Transport","Product"],
-    "Value": [sim["Transport_Cost"].sum(), sim["Product_Cost"].sum()]
+    "Type":["Transport","Product"],
+    "Value":[sim["Transport_Cost"].sum(), sim["Product_Cost"].sum()]
 })
 st.plotly_chart(px.pie(cost_df, names="Type", values="Value"))
 
 # -------------------------------
-# DECISION ENGINE (ADVANCED TEXT)
+# AI RECOMMENDATION (STRONG TEXT)
 # -------------------------------
-st.subheader("🧠 AI Recommendations")
+st.subheader("🧠 AI Insights")
 
-recommendation_text = ""
+text = ""
 
 if sim["Demand"].mean() > original["Demand"].mean():
-    recommendation_text += "• Demand is increasing → Increase inventory planning.\n"
+    text += "Demand surge detected → Increase inventory and safety stock.\n"
 
 if sim["Lead_Time"].mean() > original["Lead_Time"].mean():
-    recommendation_text += "• Delivery delays detected → Use faster logistics or backup suppliers.\n"
+    text += "Lead time increased → Use faster transportation or alternate suppliers.\n"
 
 if sim["Transport_Cost"].mean() > original["Transport_Cost"].mean():
-    recommendation_text += "• Cost rising → Optimize routes and reduce dependency on expensive suppliers.\n"
+    text += "Transport cost rise → Optimize routes and reduce dependency.\n"
 
 if sim["Reliability"].mean() < 0.75:
-    recommendation_text += "• Supplier reliability is low → Switch to more reliable vendors.\n"
+    text += "Supplier reliability risk → Diversify supplier base.\n"
 
-if recommendation_text == "":
-    recommendation_text = "• System stable. No major risks detected."
+if text == "":
+    text = "System stable with no major disruptions."
 
-st.text_area("AI Decision Insights", recommendation_text, height=200)
+st.text_area("Decision Support Output", text, height=200)
 
 # -------------------------------
 # METRICS
 # -------------------------------
-st.subheader("📊 Key Metrics")
+st.subheader("📊 Metrics")
 
 orig_cost = (original["Transport_Cost"] + original["Product_Cost"]).sum()
 new_cost = (sim["Transport_Cost"] + sim["Product_Cost"]).sum()
 
-c1, c2, c3 = st.columns(3)
+c1,c2 = st.columns(2)
 c1.metric("Original Cost", round(orig_cost,2))
 c2.metric("New Cost", round(new_cost,2))
-c3.metric("Model RMSE", round(rmse,2))
 
 # -------------------------------
-# DOWNLOAD
+# PDF
 # -------------------------------
-st.download_button("Download Report", sim.to_csv(index=False), "report.csv")
+def create_pdf(text):
+    doc = SimpleDocTemplate("report.pdf")
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph("Supply Chain DSS Report", styles['Title']))
+    story.append(Spacer(1,12))
+    story.append(Paragraph(text, styles['Normal']))
+
+    doc.build(story)
+
+create_pdf(text)
+
+with open("report.pdf", "rb") as f:
+    st.download_button("📄 Download PDF", f, "report.pdf")
+
+# -------------------------------
+# DOWNLOAD CSV
+# -------------------------------
+st.download_button("⬇ Download Data", sim.to_csv(index=False), "data.csv")
