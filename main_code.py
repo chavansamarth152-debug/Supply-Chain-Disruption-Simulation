@@ -1,20 +1,11 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import pydeck as pdk
 import plotly.express as px
-from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
 
-# PDF
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
-
-# -------------------------------
-# UI
-# -------------------------------
 st.set_page_config(layout="wide")
-st.title("🚀 AI Supply Chain DSS (Final Version)")
+st.title("🌍 Supply Chain Disruption Simulation System")
 
 # -------------------------------
 # LOAD DATA
@@ -25,181 +16,134 @@ if file:
     df = pd.read_csv(file)
 else:
     df = pd.DataFrame({
-        "Supplier_ID": ["S1","S2","S3","S4"],
-        "Reliability": [0.9,0.7,0.8,0.6],
-        "Inventory": [500,300,400,200],
-        "Demand": [450,400,420,350],
-        "Transport_Cost": [50,60,55,70],
-        "Lead_Time": [5,7,6,8],
-        "Product_Cost": [20,18,22,25]
+        "Name": ["Berlin","Munich","Paris","Rome"],
+        "Type": ["Supplier","Customer","Customer","Supplier"],
+        "Lat": [52.52,48.13,48.85,41.90],
+        "Lon": [13.40,11.58,2.35,12.49],
+        "Demand": [300,400,350,320],
+        "Inventory": [500,300,200,450],
+        "Reliability": [0.9,0.7,0.8,0.6]
     })
-
-# -------------------------------
-# SAFE COLUMNS
-# -------------------------------
-def col(name, default):
-    return df[name] if name in df.columns else pd.Series([default]*len(df))
-
-df["Reliability"] = col("Reliability", 0.8)
-df["Inventory"] = col("Inventory", 300)
-df["Demand"] = col("Demand", 300)
-df["Transport_Cost"] = col("Transport_Cost", 50)
-df["Lead_Time"] = col("Lead_Time", 5)
-df["Product_Cost"] = col("Product_Cost", 20)
-
-if "Supplier_ID" not in df.columns:
-    df["Supplier_ID"] = ["S"+str(i) for i in range(len(df))]
-
-# -------------------------------
-# ADD VARIATION (KEY FIX)
-# -------------------------------
-df["Demand"] += np.random.randint(-50, 50, len(df))
-df["Lead_Time"] += np.random.randint(-2, 3, len(df))
 
 # -------------------------------
 # SIDEBAR
 # -------------------------------
-st.sidebar.header("⚙️ Simulation")
+st.sidebar.header("⚙️ Simulation Controls")
 
 scenario = st.sidebar.selectbox("Scenario", [
-    "None", "Demand Spike", "Delay", "Cost Increase"
+    "None","Demand Spike","Delay","Disruption"
 ])
 
 demand_inc = st.sidebar.slider("Demand Increase %", 0, 100, 20)
-delay = st.sidebar.slider("Delay Days", 0, 10, 2)
 
 # -------------------------------
 # SIMULATION
 # -------------------------------
-original = df.copy()
 sim = df.copy()
 
 if scenario == "Demand Spike":
-    sim["Demand"] = sim["Demand"] * (1 + demand_inc/100)
+    sim["Demand"] *= (1 + demand_inc/100)
 
-if scenario == "Delay":
-    sim["Lead_Time"] = sim["Lead_Time"] + delay
-
-if scenario == "Cost Increase":
-    sim["Transport_Cost"] = sim["Transport_Cost"] * 1.5
+if scenario == "Disruption":
+    sim["Reliability"] *= 0.5
 
 # -------------------------------
-# DEMAND TREND (FIXED)
+# MAP VIEW (MAIN UI)
 # -------------------------------
-st.subheader("📈 Demand Trend")
+st.subheader("📍 Supply Chain Network Map")
 
-trend_df = pd.DataFrame({
-    "Original": original["Demand"],
-    "Simulated": sim["Demand"]
-})
+layer = pdk.Layer(
+    "ScatterplotLayer",
+    data=sim,
+    get_position='[Lon, Lat]',
+    get_color='[200, 30, 0, 160]',
+    get_radius=50000,
+)
 
-st.plotly_chart(px.line(trend_df))
+view_state = pdk.ViewState(
+    latitude=50,
+    longitude=10,
+    zoom=4,
+)
+
+st.pydeck_chart(pdk.Deck(
+    layers=[layer],
+    initial_view_state=view_state,
+))
 
 # -------------------------------
-# MONTE CARLO (FIXED PROPERLY)
+# NETWORK INSIGHTS
+# -------------------------------
+st.subheader("📊 Supply Chain Overview")
+
+col1, col2 = st.columns(2)
+
+col1.write("### Demand Distribution")
+col1.plotly_chart(px.bar(sim, x="Name", y="Demand"))
+
+col2.write("### Inventory Levels")
+col2.plotly_chart(px.bar(sim, x="Name", y="Inventory"))
+
+# -------------------------------
+# RISK ANALYSIS
+# -------------------------------
+st.subheader("🔥 Risk Analysis")
+
+sim["Risk"] = (1 - sim["Reliability"]) * sim["Demand"]
+
+st.plotly_chart(px.scatter(
+    sim,
+    x="Reliability",
+    y="Demand",
+    size="Inventory",
+    color="Risk",
+    hover_name="Name"
+))
+
+# -------------------------------
+# MONTE CARLO
 # -------------------------------
 st.subheader("🎲 Monte Carlo Simulation")
 
-runs = 500
-results = []
+runs = 300
+costs = []
 
 for i in range(runs):
     temp = sim.copy()
+    temp["Demand"] *= np.random.normal(1, 0.2, len(temp))
+    temp["Inventory"] *= np.random.uniform(0.8, 1.2)
 
-    temp["Demand"] *= np.random.normal(1.0, 0.2, len(temp))
-    temp["Lead_Time"] += np.random.randint(-2, 3, len(temp))
-    temp["Transport_Cost"] *= np.random.uniform(0.8, 1.5)
+    cost = (temp["Demand"] * 0.1).sum()
+    costs.append(cost)
 
-    cost = (
-        temp["Transport_Cost"] +
-        temp["Product_Cost"] +
-        (temp["Demand"] * 0.05)
-    ).sum()
+mc_df = pd.DataFrame({"Cost": costs})
 
-    results.append(cost)
-
-mc_df = pd.DataFrame({"Cost": results})
-
-st.plotly_chart(px.histogram(mc_df, x="Cost", nbins=30))
-
-st.write("Average Cost:", round(mc_df["Cost"].mean(),2))
-st.write("Max Cost:", round(mc_df["Cost"].max(),2))
-st.write("Min Cost:", round(mc_df["Cost"].min(),2))
+st.plotly_chart(px.histogram(mc_df, x="Cost"))
 
 # -------------------------------
-# GRAPHS
+# AI DECISION ENGINE
 # -------------------------------
-st.subheader("📊 Histogram")
-st.plotly_chart(px.histogram(sim, x="Demand"))
-
-st.subheader("🔥 Scatter Plot")
-sim["Risk"] = (1 - sim["Reliability"]) * sim["Lead_Time"]
-st.plotly_chart(px.scatter(sim, x="Reliability", y="Lead_Time",
-                           size="Inventory", color="Risk"))
-
-st.subheader("🥧 Pie Chart")
-cost_df = pd.DataFrame({
-    "Type":["Transport","Product"],
-    "Value":[sim["Transport_Cost"].sum(), sim["Product_Cost"].sum()]
-})
-st.plotly_chart(px.pie(cost_df, names="Type", values="Value"))
-
-# -------------------------------
-# AI RECOMMENDATION (STRONG TEXT)
-# -------------------------------
-st.subheader("🧠 AI Insights")
+st.subheader("🧠 AI Recommendations")
 
 text = ""
 
-if sim["Demand"].mean() > original["Demand"].mean():
-    text += "Demand surge detected → Increase inventory and safety stock.\n"
-
-if sim["Lead_Time"].mean() > original["Lead_Time"].mean():
-    text += "Lead time increased → Use faster transportation or alternate suppliers.\n"
-
-if sim["Transport_Cost"].mean() > original["Transport_Cost"].mean():
-    text += "Transport cost rise → Optimize routes and reduce dependency.\n"
+if sim["Demand"].mean() > df["Demand"].mean():
+    text += "• Demand surge → Increase inventory\n"
 
 if sim["Reliability"].mean() < 0.75:
-    text += "Supplier reliability risk → Diversify supplier base.\n"
+    text += "• Supplier disruption → Switch suppliers\n"
+
+if sim["Inventory"].mean() < sim["Demand"].mean():
+    text += "• Inventory shortage → Restock urgently\n"
 
 if text == "":
-    text = "System stable with no major disruptions."
+    text = "• Supply chain stable"
 
-st.text_area("Decision Support Output", text, height=200)
-
-# -------------------------------
-# METRICS
-# -------------------------------
-st.subheader("📊 Metrics")
-
-orig_cost = (original["Transport_Cost"] + original["Product_Cost"]).sum()
-new_cost = (sim["Transport_Cost"] + sim["Product_Cost"]).sum()
-
-c1,c2 = st.columns(2)
-c1.metric("Original Cost", round(orig_cost,2))
-c2.metric("New Cost", round(new_cost,2))
+st.text_area("Decision Output", text, height=150)
 
 # -------------------------------
-# PDF
+# TABLE VIEW (LIKE YOUR UI)
 # -------------------------------
-def create_pdf(text):
-    doc = SimpleDocTemplate("report.pdf")
-    styles = getSampleStyleSheet()
-    story = []
+st.subheader("📋 Supply Chain Table")
 
-    story.append(Paragraph("Supply Chain DSS Report", styles['Title']))
-    story.append(Spacer(1,12))
-    story.append(Paragraph(text, styles['Normal']))
-
-    doc.build(story)
-
-create_pdf(text)
-
-with open("report.pdf", "rb") as f:
-    st.download_button("📄 Download PDF", f, "report.pdf")
-
-# -------------------------------
-# DOWNLOAD CSV
-# -------------------------------
-st.download_button("⬇ Download Data", sim.to_csv(index=False), "data.csv")
+st.dataframe(sim)
