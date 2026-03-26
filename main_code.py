@@ -5,7 +5,7 @@ import plotly.express as px
 import pydeck as pdk
 
 st.set_page_config(layout="wide")
-st.title("🌍 Universal Supply Chain DSS (Any CSV Supported)")
+st.title("🌍 Universal Supply Chain DSS (Industry UI)")
 
 # -------------------------------
 # LOAD DATA
@@ -43,7 +43,6 @@ reliability_col = find_col(["reliability","score"])
 lat_col = find_col(["lat","latitude"])
 lon_col = find_col(["lon","lng","longitude"])
 region_col = find_col(["region","supplier_region","location"])
-name_col = df.columns[0]
 
 # fallback safe values
 df["Demand"] = df[demand_col] if demand_col else np.random.randint(200,500,len(df))
@@ -74,9 +73,9 @@ if scenario == "Disruption":
     sim["Reliability"] *= 0.5
 
 # -------------------------------
-# 🌍 MAP (FINAL FIXED)
+# 🌍 ADVANCED MAP (FINAL)
 # -------------------------------
-st.subheader("🌍 Supply Chain Map")
+st.subheader("🌍 Supply Chain Network Map")
 
 region_map = {
     "Asia-Pacific": (20, 78),
@@ -107,26 +106,61 @@ if "disruption_severity" in sim.columns:
 else:
     sim["Risk"] = (1 - sim["Reliability"]) * sim["Demand"]
 
-# color (RED = high risk)
-sim["Color"] = sim["Risk"].apply(
-    lambda x: [255,0,0] if x > sim["Risk"].mean() else [0,150,255]
-)
-
-# performance optimization
+# -------------------------------
+# PERFORMANCE OPTIMIZATION
+# -------------------------------
 if len(sim) > 5000:
     sim = sim.sample(2000)
 
-layer = pdk.Layer(
+# -------------------------------
+# COLOR & NODE TYPES
+# -------------------------------
+sim["Color"] = sim["Risk"].apply(
+    lambda x: [255,0,0] if x > sim["Risk"].mean() else [0,120,255]
+)
+
+# -------------------------------
+# NETWORK CONNECTION LINES
+# -------------------------------
+lines = []
+coords = sim[["Lat","Lon"]].dropna().values
+
+for i in range(len(coords)-1):
+    lines.append({
+        "start_lat": coords[i][0],
+        "start_lon": coords[i][1],
+        "end_lat": coords[i+1][0],
+        "end_lon": coords[i+1][1]
+    })
+
+lines_df = pd.DataFrame(lines)
+
+# -------------------------------
+# MAP LAYERS
+# -------------------------------
+point_layer = pdk.Layer(
     "ScatterplotLayer",
     data=sim,
     get_position='[Lon, Lat]',
-    get_radius=50000,
+    get_radius=120000,
     get_color="Color",
     pickable=True
 )
 
+line_layer = pdk.Layer(
+    "LineLayer",
+    data=lines_df,
+    get_source_position='[start_lon, start_lat]',
+    get_target_position='[end_lon, end_lat]',
+    get_width=3,
+    get_color=[0,150,255]
+)
+
+# -------------------------------
+# RENDER MAP
+# -------------------------------
 st.pydeck_chart(pdk.Deck(
-    layers=[layer],
+    layers=[line_layer, point_layer],
     initial_view_state=pdk.ViewState(latitude=20, longitude=0, zoom=1),
     tooltip={
         "html": "<b>Risk:</b> {Risk}<br/><b>Demand:</b> {Demand}",
@@ -166,12 +200,10 @@ for i in range(runs):
     temp = sim.copy()
     temp["Demand"] *= np.random.normal(1,0.2,len(temp))
     temp["Inventory"] *= np.random.uniform(0.8,1.2,len(temp))
-
     cost = (temp["Demand"] * 0.1).sum()
     costs.append(cost)
 
 mc_df = pd.DataFrame({"Cost": costs})
-
 st.plotly_chart(px.histogram(mc_df, x="Cost"))
 
 # -------------------------------
