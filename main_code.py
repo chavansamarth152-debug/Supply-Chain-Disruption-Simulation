@@ -2,76 +2,53 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
+import pydeck as pdk
 
 st.set_page_config(layout="wide")
-st.title("🌍 AI Supply Chain Disruption Simulation System")
+st.title("🌍 Universal Supply Chain DSS (Any CSV Supported)")
 
 # -------------------------------
-# LOAD CSV (FAST)
+# LOAD DATA
 # -------------------------------
-file = st.file_uploader("Upload CSV", type=["csv"])
-
-@st.cache_data
-def load_data(file):
-    return pd.read_csv(file)
+file = st.file_uploader("Upload ANY CSV", type=["csv"])
 
 if file:
-    df = load_data(file)
+    df = pd.read_csv(file)
 else:
     df = pd.DataFrame({
-        "supplier_region": ["Asia-Pacific","Europe","North America","South America"],
-        "disruption_type": ["Flood","Strike","Cyber","War"],
-        "industry": ["Electronics","Auto","Pharma","Retail"],
-        "disruption_severity": [3,4,2,5]
+        "Name": ["A","B","C"],
+        "Demand": [300,400,350],
+        "Inventory": [500,200,300],
+        "Reliability": [0.9,0.7,0.8],
+        "Lat": [20,25,30],
+        "Lon": [70,75,80]
     })
 
 st.write("### 📊 Data Preview")
 st.write(df.head())
 
 # -------------------------------
-# REGION MAPPING
+# AUTO COLUMN DETECTION
 # -------------------------------
-region_map = {
-    "Asia-Pacific": ("India", 20, 78),
-    "Europe": ("Germany", 51, 10),
-    "North America": ("USA", 37, -95),
-    "South America": ("Brazil", -14, -51),
-    "Africa": ("Nigeria", 9, 8),
-    "Middle East": ("UAE", 24, 54)
-}
+def find_col(possible_names):
+    for col in df.columns:
+        for name in possible_names:
+            if name.lower() in col.lower():
+                return col
+    return None
 
-df["Lat"] = df["supplier_region"].map(lambda x: region_map.get(x, ("",0,0))[1])
-df["Lon"] = df["supplier_region"].map(lambda x: region_map.get(x, ("",0,0))[2])
+demand_col = find_col(["demand","sales"])
+inventory_col = find_col(["inventory","stock"])
+reliability_col = find_col(["reliability","score"])
+lat_col = find_col(["lat","latitude"])
+lon_col = find_col(["lon","lng","longitude"])
+region_col = find_col(["region","supplier_region","location"])
+name_col = df.columns[0]
 
-# -------------------------------
-# 🔥 PERFORMANCE BOOST
-# -------------------------------
-# Take sample if large dataset
-if len(df) > 5000:
-    df_sample = df.sample(2000)
-else:
-    df_sample = df
-
-# Aggregate for map speed
-map_df = df_sample.groupby(["supplier_region","Lat","Lon"], as_index=False).agg({
-    "disruption_severity":"mean"
-})
-
-# -------------------------------
-# RISK LEVELS (NEW FEATURE)
-# -------------------------------
-def risk_level(x):
-    if x < 2:
-        return "Low"
-    elif x < 4:
-        return "Medium"
-    else:
-        return "High"
-
-map_df["Risk_Level"] = map_df["disruption_severity"].apply(risk_level)
+# fallback safe values
+df["Demand"] = df[demand_col] if demand_col else np.random.randint(200,500,len(df))
+df["Inventory"] = df[inventory_col] if inventory_col else np.random.randint(200,500,len(df))
+df["Reliability"] = df[reliability_col] if reliability_col else np.random.uniform(0.6,0.95,len(df))
 
 # -------------------------------
 # SIDEBAR
@@ -79,122 +56,147 @@ map_df["Risk_Level"] = map_df["disruption_severity"].apply(risk_level)
 st.sidebar.header("⚙️ Simulation")
 
 scenario = st.sidebar.selectbox("Scenario", [
-    "None","High Disruption","Extreme Risk"
+    "None","Demand Spike","Delay","Disruption"
 ])
 
-if scenario == "High Disruption":
-    map_df["disruption_severity"] *= 1.5
-
-if scenario == "Extreme Risk":
-    map_df["disruption_severity"] *= 2
+demand_inc = st.sidebar.slider("Demand Increase %", 0, 100, 20)
 
 # -------------------------------
-# 🌍 FAST STATIC MAP
+# SIMULATION
 # -------------------------------
-st.subheader("🌍 Global Disruption Map")
+original = df.copy()
+sim = df.copy()
 
-fig = px.scatter_geo(
-    map_df,
-    lat="Lat",
-    lon="Lon",
-    color="Risk_Level",
-    size="disruption_severity",
-    hover_name="supplier_region",
-    color_discrete_map={
-        "Low": "green",
-        "Medium": "orange",
-        "High": "red"
+if scenario == "Demand Spike":
+    sim["Demand"] *= (1 + demand_inc/100)
+
+if scenario == "Disruption":
+    sim["Reliability"] *= 0.5
+
+# -------------------------------
+# 🌍 MAP (FINAL FIXED)
+# -------------------------------
+st.subheader("🌍 Supply Chain Map")
+
+region_map = {
+    "Asia-Pacific": (20, 78),
+    "Europe": (51, 10),
+    "North America": (37, -95),
+    "South America": (-14, -51),
+    "Africa": (9, 8),
+    "Middle East": (24, 54)
+}
+
+# assign coordinates
+if lat_col and lon_col:
+    sim["Lat"] = df[lat_col]
+    sim["Lon"] = df[lon_col]
+
+elif region_col:
+    sim["Lat"] = sim[region_col].map(lambda x: region_map.get(x, (0,0))[0])
+    sim["Lon"] = sim[region_col].map(lambda x: region_map.get(x, (0,0))[1])
+
+else:
+    st.warning("No location data found → Map disabled")
+    sim["Lat"] = 0
+    sim["Lon"] = 0
+
+# risk calculation
+if "disruption_severity" in sim.columns:
+    sim["Risk"] = sim["disruption_severity"]
+else:
+    sim["Risk"] = (1 - sim["Reliability"]) * sim["Demand"]
+
+# color (RED = high risk)
+sim["Color"] = sim["Risk"].apply(
+    lambda x: [255,0,0] if x > sim["Risk"].mean() else [0,150,255]
+)
+
+# performance optimization
+if len(sim) > 5000:
+    sim = sim.sample(2000)
+
+layer = pdk.Layer(
+    "ScatterplotLayer",
+    data=sim,
+    get_position='[Lon, Lat]',
+    get_radius=50000,
+    get_color="Color",
+    pickable=True
+)
+
+st.pydeck_chart(pdk.Deck(
+    layers=[layer],
+    initial_view_state=pdk.ViewState(latitude=20, longitude=0, zoom=1),
+    tooltip={
+        "html": "<b>Risk:</b> {Risk}<br/><b>Demand:</b> {Demand}",
+        "style": {"backgroundColor": "black", "color": "white"}
     }
-)
-
-fig.update_layout(
-    geo=dict(showland=True),
-    title="Supply Chain Disruption Risk Map"
-)
-
-st.plotly_chart(fig, use_container_width=True)
-
-# -------------------------------
-# 📊 GRAPHS
-# -------------------------------
-st.subheader("📊 Severity Distribution")
-st.plotly_chart(px.histogram(df_sample, x="disruption_severity"))
-
-st.subheader("📈 Trend")
-st.plotly_chart(px.line(df_sample["disruption_severity"]))
-
-st.subheader("🔥 Risk Scatter")
-st.plotly_chart(px.scatter(
-    df_sample,
-    x="disruption_severity",
-    y=np.arange(len(df_sample)),
-    color="disruption_severity"
 ))
 
-st.subheader("🥧 Industry Impact")
-if "industry" in df.columns:
-    st.plotly_chart(px.pie(df_sample, names="industry", values="disruption_severity"))
+# -------------------------------
+# GRAPHS
+# -------------------------------
+st.subheader("📊 Histogram")
+st.plotly_chart(px.histogram(sim, x="Demand"))
+
+st.subheader("📈 Line Graph")
+st.plotly_chart(px.line(sim["Demand"]))
+
+st.subheader("🔥 Scatter")
+sim["Risk2"] = (1 - sim["Reliability"]) * sim["Demand"]
+st.plotly_chart(px.scatter(sim, x="Reliability", y="Demand", color="Risk2"))
+
+st.subheader("🥧 Pie Chart")
+pie_df = pd.DataFrame({
+    "Type":["Demand","Inventory"],
+    "Value":[sim["Demand"].sum(), sim["Inventory"].sum()]
+})
+st.plotly_chart(px.pie(pie_df, names="Type", values="Value"))
 
 # -------------------------------
-# 🎲 MONTE CARLO (FAST)
+# MONTE CARLO
 # -------------------------------
 st.subheader("🎲 Monte Carlo Simulation")
 
 runs = 300
-results = []
+costs = []
 
 for i in range(runs):
-    temp = df_sample.copy()
-    temp["disruption_severity"] *= np.random.normal(1, 0.3, len(temp))
-    cost = (temp["disruption_severity"] * 100).sum()
-    results.append(cost)
+    temp = sim.copy()
+    temp["Demand"] *= np.random.normal(1,0.2,len(temp))
+    temp["Inventory"] *= np.random.uniform(0.8,1.2,len(temp))
 
-mc_df = pd.DataFrame({"Cost": results})
+    cost = (temp["Demand"] * 0.1).sum()
+    costs.append(cost)
 
-st.plotly_chart(px.histogram(mc_df, x="Cost", nbins=25))
+mc_df = pd.DataFrame({"Cost": costs})
+
+st.plotly_chart(px.histogram(mc_df, x="Cost"))
 
 # -------------------------------
-# 🧠 AI RECOMMENDATION
+# AI RECOMMENDATIONS
 # -------------------------------
-st.subheader("🧠 AI Insights")
+st.subheader("🧠 AI Decision Support")
 
 text = ""
 
-if df_sample["disruption_severity"].mean() > 3:
-    text += "• High disruption risk → Activate contingency planning\n"
+if sim["Demand"].mean() > original["Demand"].mean():
+    text += "• Demand increasing → Increase production\n"
 
-if "Cyber" in df_sample.get("disruption_type", []).values:
-    text += "• Cyber risk detected → Strengthen cybersecurity\n"
+if sim["Reliability"].mean() < 0.75:
+    text += "• Supplier risk → Diversify suppliers\n"
 
-if "Strike" in df_sample.get("disruption_type", []).values:
-    text += "• Labor issues → Prepare backup workforce\n"
+if sim["Inventory"].mean() < sim["Demand"].mean():
+    text += "• Inventory shortage → Restock\n"
 
 if text == "":
     text = "• System stable"
 
-st.text_area("Decision Support", text, height=200)
-
-# -------------------------------
-# 📄 PDF
-# -------------------------------
-def create_pdf(text):
-    doc = SimpleDocTemplate("report.pdf")
-    styles = getSampleStyleSheet()
-    story = []
-
-    story.append(Paragraph("Supply Chain Report", styles['Title']))
-    story.append(Spacer(1,12))
-    story.append(Paragraph(text, styles['Normal']))
-
-    doc.build(story)
-
-create_pdf(text)
-
-with open("report.pdf", "rb") as f:
-    st.download_button("📄 Download PDF", f, "report.pdf")
+st.text_area("AI Insights", text, height=150)
 
 # -------------------------------
 # TABLE
 # -------------------------------
 st.subheader("📋 Data Table")
-st.dataframe(df_sample)
+st.dataframe(sim)
