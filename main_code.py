@@ -7,8 +7,8 @@ from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 
-st.set_page_config(page_title="AI Supply Chain DSS", layout="wide")
-st.title("🚀 AI Supply Chain Disruption System")
+st.set_page_config(layout="wide")
+st.title("🚀 AI Supply Chain DSS with Monte Carlo Simulation")
 
 # -------------------------------
 # LOAD DATA
@@ -28,9 +28,6 @@ else:
         "Product_Cost": [20,18,22,25]
     })
 
-st.write("### 📊 Data Preview")
-st.write(df)
-
 # -------------------------------
 # SAFE COLUMN HANDLING
 # -------------------------------
@@ -44,24 +41,26 @@ df["Transport_Cost"] = col("Transport_Cost", 50)
 df["Lead_Time"] = col("Lead_Time", 5)
 df["Product_Cost"] = col("Product_Cost", 20)
 
-# Create ID if missing
 if "Supplier_ID" not in df.columns:
     df["Supplier_ID"] = ["S"+str(i) for i in range(len(df))]
 
 # -------------------------------
+# ADD VARIATION (IMPORTANT FIX)
+# -------------------------------
+df["Demand"] = df["Demand"] + np.random.randint(-50, 50, size=len(df))
+df["Lead_Time"] = df["Lead_Time"] + np.random.randint(-2, 2, size=len(df))
+
+# -------------------------------
 # SIDEBAR
 # -------------------------------
-st.sidebar.header("⚙️ Simulation Controls")
+st.sidebar.header("Simulation")
 
 scenario = st.sidebar.selectbox("Scenario", [
-    "None",
-    "Demand Spike",
-    "Flood Delay",
-    "Transport Cost Increase"
+    "None", "Demand Spike", "Delay", "Cost Increase"
 ])
 
-demand_inc = st.sidebar.slider("Demand Increase %", 0, 100, 20)
-delay_days = st.sidebar.slider("Delay Days", 0, 10, 2)
+demand_inc = st.sidebar.slider("Demand % Increase", 0, 100, 20)
+delay = st.sidebar.slider("Delay Days", 0, 10, 2)
 
 # -------------------------------
 # SIMULATION
@@ -70,13 +69,31 @@ original = df.copy()
 sim = df.copy()
 
 if scenario == "Demand Spike":
-    sim["Demand"] = original["Demand"] * (1 + demand_inc / 100)
+    sim["Demand"] = sim["Demand"] * (1 + demand_inc/100)
 
-if scenario == "Flood Delay":
-    sim["Lead_Time"] = original["Lead_Time"] + delay_days
+if scenario == "Delay":
+    sim["Lead_Time"] = sim["Lead_Time"] + delay
 
-if scenario == "Transport Cost Increase":
-    sim["Transport_Cost"] = original["Transport_Cost"] * 1.5
+if scenario == "Cost Increase":
+    sim["Transport_Cost"] *= 1.5
+
+# -------------------------------
+# MONTE CARLO SIMULATION
+# -------------------------------
+st.subheader("🎲 Monte Carlo Simulation")
+
+runs = 100
+results = []
+
+for i in range(runs):
+    temp = sim.copy()
+    temp["Demand"] = temp["Demand"] * np.random.uniform(0.9, 1.2)
+    total_cost = (temp["Transport_Cost"] + temp["Product_Cost"]).sum()
+    results.append(total_cost)
+
+mc_df = pd.DataFrame({"Cost": results})
+
+st.plotly_chart(px.histogram(mc_df, x="Cost", nbins=20))
 
 # -------------------------------
 # ML MODEL
@@ -98,104 +115,69 @@ except:
     pass
 
 # -------------------------------
-# COST
+# GRAPHS
 # -------------------------------
-orig_cost = (original["Transport_Cost"] + original["Product_Cost"]).sum()
-new_cost = (sim["Transport_Cost"] + sim["Product_Cost"]).sum()
+
+st.subheader("📊 Histogram (Demand)")
+st.plotly_chart(px.histogram(sim, x="Demand"))
+
+st.subheader("📈 Line Graph (Demand Trend)")
+st.plotly_chart(px.line(sim, y="Demand"))
+
+st.subheader("🔥 Scatter Plot (Risk)")
+sim["Risk"] = (1 - sim["Reliability"]) * sim["Lead_Time"]
+
+st.plotly_chart(px.scatter(sim,
+                           x="Reliability",
+                           y="Lead_Time",
+                           size="Inventory",
+                           color="Risk"))
+
+st.subheader("🥧 Pie Chart (Cost Split)")
+cost_df = pd.DataFrame({
+    "Type": ["Transport","Product"],
+    "Value": [sim["Transport_Cost"].sum(), sim["Product_Cost"].sum()]
+})
+st.plotly_chart(px.pie(cost_df, names="Type", values="Value"))
+
+# -------------------------------
+# DECISION ENGINE (ADVANCED TEXT)
+# -------------------------------
+st.subheader("🧠 AI Recommendations")
+
+recommendation_text = ""
+
+if sim["Demand"].mean() > original["Demand"].mean():
+    recommendation_text += "• Demand is increasing → Increase inventory planning.\n"
+
+if sim["Lead_Time"].mean() > original["Lead_Time"].mean():
+    recommendation_text += "• Delivery delays detected → Use faster logistics or backup suppliers.\n"
+
+if sim["Transport_Cost"].mean() > original["Transport_Cost"].mean():
+    recommendation_text += "• Cost rising → Optimize routes and reduce dependency on expensive suppliers.\n"
+
+if sim["Reliability"].mean() < 0.75:
+    recommendation_text += "• Supplier reliability is low → Switch to more reliable vendors.\n"
+
+if recommendation_text == "":
+    recommendation_text = "• System stable. No major risks detected."
+
+st.text_area("AI Decision Insights", recommendation_text, height=200)
 
 # -------------------------------
 # METRICS
 # -------------------------------
 st.subheader("📊 Key Metrics")
 
+orig_cost = (original["Transport_Cost"] + original["Product_Cost"]).sum()
+new_cost = (sim["Transport_Cost"] + sim["Product_Cost"]).sum()
+
 c1, c2, c3 = st.columns(3)
 c1.metric("Original Cost", round(orig_cost,2))
 c2.metric("New Cost", round(new_cost,2))
-c3.metric("RMSE", round(rmse,2))
-
-# -------------------------------
-# HISTOGRAM
-# -------------------------------
-st.subheader("📊 Demand Distribution (Histogram)")
-st.plotly_chart(px.histogram(sim, x="Demand"))
-
-# -------------------------------
-# SCATTER PLOT (FIXED)
-# -------------------------------
-st.subheader("🔥 Risk Scatter Plot")
-
-sim["Risk"] = (1 - sim["Reliability"]) * sim["Lead_Time"]
-
-st.plotly_chart(
-    px.scatter(
-        sim,
-        x="Reliability",
-        y="Lead_Time",
-        size="Inventory",
-        color="Risk"
-    )
-)
-
-# -------------------------------
-# LINE GRAPH
-# -------------------------------
-st.subheader("📈 Demand Change (Line Graph)")
-
-line_df = pd.DataFrame({
-    "Original": original["Demand"],
-    "Simulated": sim["Demand"]
-})
-
-st.plotly_chart(px.line(line_df))
-
-# -------------------------------
-# PIE CHART
-# -------------------------------
-st.subheader("🥧 Cost Distribution")
-
-cost_df = pd.DataFrame({
-    "Type": ["Transport", "Product"],
-    "Cost": [sim["Transport_Cost"].sum(), sim["Product_Cost"].sum()]
-})
-
-st.plotly_chart(px.pie(cost_df, names="Type", values="Cost"))
-
-# -------------------------------
-# BAR COMPARISON
-# -------------------------------
-st.subheader("📊 Before vs After Demand")
-
-bar_df = pd.DataFrame({
-    "Supplier": sim["Supplier_ID"],
-    "Original": original["Demand"],
-    "Simulated": sim["Demand"]
-})
-
-st.plotly_chart(px.bar(bar_df, x="Supplier", y=["Original","Simulated"], barmode="group"))
-
-# -------------------------------
-# RECOMMENDATIONS
-# -------------------------------
-st.subheader("🧠 AI Recommendations")
-
-rec = []
-
-if (sim["Inventory"] < sim["Demand"]).any():
-    rec.append("Increase Inventory")
-
-if (sim["Lead_Time"] > original["Lead_Time"]).any():
-    rec.append("Reduce Delay / Use Faster Routes")
-
-if (sim["Transport_Cost"] > original["Transport_Cost"]).any():
-    rec.append("Optimize Transport Cost")
-
-if not rec:
-    rec.append("System Stable")
-
-for r in rec:
-    st.success(r)
+c3.metric("Model RMSE", round(rmse,2))
 
 # -------------------------------
 # DOWNLOAD
 # -------------------------------
-st.download_button("⬇ Download Report", sim.to_csv(index=False), "report.csv")
+st.download_button("Download Report", sim.to_csv(index=False), "report.csv")
