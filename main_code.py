@@ -1,34 +1,58 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pydeck as pdk
 import plotly.express as px
+import pydeck as pdk
 
 st.set_page_config(layout="wide")
-st.title("🌍 Supply Chain Disruption Simulation System")
+st.title("🌍 Universal Supply Chain DSS (Any CSV Supported)")
 
 # -------------------------------
 # LOAD DATA
 # -------------------------------
-file = st.file_uploader("Upload CSV", type=["csv"])
+file = st.file_uploader("Upload ANY CSV", type=["csv"])
 
 if file:
     df = pd.read_csv(file)
 else:
     df = pd.DataFrame({
-        "Name": ["Berlin","Munich","Paris","Rome"],
-        "Type": ["Supplier","Customer","Customer","Supplier"],
-        "Lat": [52.52,48.13,48.85,41.90],
-        "Lon": [13.40,11.58,2.35,12.49],
-        "Demand": [300,400,350,320],
-        "Inventory": [500,300,200,450],
-        "Reliability": [0.9,0.7,0.8,0.6]
+        "Name": ["A","B","C"],
+        "Demand": [300,400,350],
+        "Inventory": [500,200,300],
+        "Reliability": [0.9,0.7,0.8],
+        "Lat": [20,25,30],
+        "Lon": [70,75,80]
     })
+
+st.write("### 📊 Data Preview")
+st.write(df.head())
+
+# -------------------------------
+# AUTO COLUMN DETECTION
+# -------------------------------
+def find_col(possible_names):
+    for col in df.columns:
+        for name in possible_names:
+            if name.lower() in col.lower():
+                return col
+    return None
+
+demand_col = find_col(["demand","sales"])
+inventory_col = find_col(["inventory","stock"])
+reliability_col = find_col(["reliability","score"])
+lat_col = find_col(["lat","latitude"])
+lon_col = find_col(["lon","lng","longitude"])
+name_col = df.columns[0]
+
+# fallback safe values
+df["Demand"] = df[demand_col] if demand_col else np.random.randint(200,500,len(df))
+df["Inventory"] = df[inventory_col] if inventory_col else np.random.randint(200,500,len(df))
+df["Reliability"] = df[reliability_col] if reliability_col else np.random.uniform(0.6,0.95,len(df))
 
 # -------------------------------
 # SIDEBAR
 # -------------------------------
-st.sidebar.header("⚙️ Simulation Controls")
+st.sidebar.header("⚙️ Simulation")
 
 scenario = st.sidebar.selectbox("Scenario", [
     "None","Demand Spike","Delay","Disruption"
@@ -39,6 +63,7 @@ demand_inc = st.sidebar.slider("Demand Increase %", 0, 100, 20)
 # -------------------------------
 # SIMULATION
 # -------------------------------
+original = df.copy()
 sim = df.copy()
 
 if scenario == "Demand Spike":
@@ -48,57 +73,48 @@ if scenario == "Disruption":
     sim["Reliability"] *= 0.5
 
 # -------------------------------
-# MAP VIEW (MAIN UI)
+# MAP (SAFE)
 # -------------------------------
-st.subheader("📍 Supply Chain Network Map")
+st.subheader("🌍 Supply Chain Map")
 
-layer = pdk.Layer(
-    "ScatterplotLayer",
-    data=sim,
-    get_position='[Lon, Lat]',
-    get_color='[200, 30, 0, 160]',
-    get_radius=50000,
-)
+if lat_col and lon_col:
+    df["Lat"] = df[lat_col]
+    df["Lon"] = df[lon_col]
 
-view_state = pdk.ViewState(
-    latitude=50,
-    longitude=10,
-    zoom=4,
-)
+    layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=sim,
+        get_position='[Lon, Lat]',
+        get_radius=50000,
+        get_color='[0,150,255]'
+    )
 
-st.pydeck_chart(pdk.Deck(
-    layers=[layer],
-    initial_view_state=view_state,
-))
-
-# -------------------------------
-# NETWORK INSIGHTS
-# -------------------------------
-st.subheader("📊 Supply Chain Overview")
-
-col1, col2 = st.columns(2)
-
-col1.write("### Demand Distribution")
-col1.plotly_chart(px.bar(sim, x="Name", y="Demand"))
-
-col2.write("### Inventory Levels")
-col2.plotly_chart(px.bar(sim, x="Name", y="Inventory"))
+    st.pydeck_chart(pdk.Deck(
+        layers=[layer],
+        initial_view_state=pdk.ViewState(latitude=20, longitude=0, zoom=1)
+    ))
+else:
+    st.warning("No location data found → Map disabled")
 
 # -------------------------------
-# RISK ANALYSIS
+# GRAPHS
 # -------------------------------
-st.subheader("🔥 Risk Analysis")
+st.subheader("📊 Histogram")
+st.plotly_chart(px.histogram(sim, x="Demand"))
 
+st.subheader("📈 Line Graph")
+st.plotly_chart(px.line(sim["Demand"]))
+
+st.subheader("🔥 Scatter")
 sim["Risk"] = (1 - sim["Reliability"]) * sim["Demand"]
+st.plotly_chart(px.scatter(sim, x="Reliability", y="Demand", color="Risk"))
 
-st.plotly_chart(px.scatter(
-    sim,
-    x="Reliability",
-    y="Demand",
-    size="Inventory",
-    color="Risk",
-    hover_name="Name"
-))
+st.subheader("🥧 Pie Chart")
+pie_df = pd.DataFrame({
+    "Type":["Demand","Inventory"],
+    "Value":[sim["Demand"].sum(), sim["Inventory"].sum()]
+})
+st.plotly_chart(px.pie(pie_df, names="Type", values="Value"))
 
 # -------------------------------
 # MONTE CARLO
@@ -110,8 +126,8 @@ costs = []
 
 for i in range(runs):
     temp = sim.copy()
-    temp["Demand"] *= np.random.normal(1, 0.2, len(temp))
-    temp["Inventory"] *= np.random.uniform(0.8, 1.2)
+    temp["Demand"] *= np.random.normal(1,0.2,len(temp))
+    temp["Inventory"] *= np.random.uniform(0.8,1.2)
 
     cost = (temp["Demand"] * 0.1).sum()
     costs.append(cost)
@@ -121,29 +137,28 @@ mc_df = pd.DataFrame({"Cost": costs})
 st.plotly_chart(px.histogram(mc_df, x="Cost"))
 
 # -------------------------------
-# AI DECISION ENGINE
+# AI RECOMMENDATIONS
 # -------------------------------
-st.subheader("🧠 AI Recommendations")
+st.subheader("🧠 AI Decision Support")
 
 text = ""
 
-if sim["Demand"].mean() > df["Demand"].mean():
-    text += "• Demand surge → Increase inventory\n"
+if sim["Demand"].mean() > original["Demand"].mean():
+    text += "• Demand increasing → Increase production\n"
 
 if sim["Reliability"].mean() < 0.75:
-    text += "• Supplier disruption → Switch suppliers\n"
+    text += "• Supplier risk → Diversify suppliers\n"
 
 if sim["Inventory"].mean() < sim["Demand"].mean():
-    text += "• Inventory shortage → Restock urgently\n"
+    text += "• Inventory shortage → Restock\n"
 
 if text == "":
-    text = "• Supply chain stable"
+    text = "• System stable"
 
-st.text_area("Decision Output", text, height=150)
+st.text_area("AI Insights", text, height=150)
 
 # -------------------------------
-# TABLE VIEW (LIKE YOUR UI)
+# TABLE
 # -------------------------------
-st.subheader("📋 Supply Chain Table")
-
+st.subheader("📋 Data Table")
 st.dataframe(sim)
