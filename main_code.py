@@ -1,66 +1,54 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LinearRegression
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import mean_squared_error
-
+import plotly.graph_objects as go
 import plotly.express as px
 
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+
 # -------------------------------
-# PAGE CONFIG
+# PAGE SETUP
 # -------------------------------
-st.set_page_config(page_title="Supply Chain DSS", layout="wide")
-st.title("📦 AI-Powered Supply Chain DSS")
+st.set_page_config(page_title="Supply Chain AI DSS", layout="wide")
+
+st.title("🚀 AI Supply Chain Disruption Simulator")
+st.markdown("### Professional Decision Support System")
 
 # -------------------------------
 # LOAD DATA
 # -------------------------------
-uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
+file = st.file_uploader("Upload CSV", type=["csv"])
 
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
+if file:
+    df = pd.read_csv(file)
 else:
-    st.warning("Using fallback sample data")
     df = pd.DataFrame({
-        "Supplier_ID": ["S1","S2","S3"],
-        "Reliability": [0.9,0.7,0.8],
-        "Inventory": [500,300,400],
-        "Demand": [450,400,420],
-        "Transport_Cost": [50,60,55],
-        "Lead_Time": [5,7,6],
-        "Product_Cost": [20,18,22]
+        "Supplier_ID": ["S1","S2","S3","S4"],
+        "Reliability": [0.9,0.7,0.8,0.6],
+        "Inventory": [500,300,400,200],
+        "Demand": [450,400,420,350],
+        "Transport_Cost": [50,60,55,70],
+        "Lead_Time": [5,7,6,8],
+        "Product_Cost": [20,18,22,25]
     })
 
-st.subheader("📊 Data Preview")
-st.write(df)
+# SAFE COLUMN HANDLING
+def safe(col, val):
+    return df[col] if col in df.columns else pd.Series([val]*len(df))
+
+df["Reliability"] = safe("Reliability", 0.8)
+df["Inventory"] = safe("Inventory", 300)
+df["Demand"] = safe("Demand", 300)
+df["Transport_Cost"] = safe("Transport_Cost", 50)
+df["Lead_Time"] = safe("Lead_Time", 5)
+df["Product_Cost"] = safe("Product_Cost", 20)
 
 # -------------------------------
-# SAFE COLUMN HANDLING (MAIN FIX)
+# SIDEBAR CONTROLS
 # -------------------------------
-def get_col(col, default):
-    return df[col] if col in df.columns else pd.Series([default]*len(df))
-
-df["Reliability"] = get_col("Reliability", 0.8)
-df["Inventory"] = get_col("Inventory", 300)
-df["Demand"] = get_col("Demand", 300)
-df["Transport_Cost"] = get_col("Transport_Cost", 50)
-df["Lead_Time"] = get_col("Lead_Time", 5)
-df["Product_Cost"] = get_col("Product_Cost", 20)
-
-# -------------------------------
-# FEATURE ENGINEERING
-# -------------------------------
-df.fillna(df.mean(numeric_only=True), inplace=True)
-df["Risk_Score"] = (1 - df["Reliability"]) * df["Lead_Time"]
-
-# -------------------------------
-# SIDEBAR
-# -------------------------------
-st.sidebar.header("⚙️ Controls")
+st.sidebar.header("⚙️ Simulation Control")
 
 scenario = st.sidebar.selectbox("Scenario", [
     "None",
@@ -69,102 +57,135 @@ scenario = st.sidebar.selectbox("Scenario", [
     "Transport Strike"
 ])
 
-demand_increase = st.sidebar.slider("Demand Increase %", 0, 100, 20)
-delay_days = st.sidebar.slider("Delay Days", 0, 10, 2)
+demand_inc = st.sidebar.slider("Demand Increase %", 0, 100, 20)
+delay = st.sidebar.slider("Delay Days", 0, 10, 2)
 
 # -------------------------------
 # SIMULATION
 # -------------------------------
-sim_df = df.copy()
+original = df.copy()
+sim = df.copy()
+
+if scenario == "Demand Spike":
+    sim["Demand"] = sim["Demand"] * (1 + demand_inc/100)
 
 if scenario == "Flood":
-    sim_df["Lead_Time"] += delay_days
+    sim["Lead_Time"] = sim["Lead_Time"] + delay
 
-elif scenario == "Demand Spike":
-    sim_df["Demand"] *= (1 + demand_increase / 100)
-
-elif scenario == "Transport Strike":
-    sim_df["Transport_Cost"] *= 1.3
+if scenario == "Transport Strike":
+    sim["Transport_Cost"] = sim["Transport_Cost"] * 1.5
 
 # -------------------------------
-# MACHINE LEARNING (SAFE)
+# ML MODEL (DEMAND)
 # -------------------------------
 rmse = 0
 
 try:
-    features = ["Inventory", "Lead_Time", "Transport_Cost"]
-    X = sim_df[features]
-    y = sim_df["Demand"]
+    X = original[["Inventory","Lead_Time","Transport_Cost"]]
+    y = original["Demand"]
 
     if len(df) > 3:
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+        X_train, X_test, y_train, y_test = train_test_split(X, y)
 
         model = LinearRegression()
         model.fit(X_train, y_train)
 
-        preds = model.predict(X_test)
-        rmse = np.sqrt(mean_squared_error(y_test, preds))
+        pred = model.predict(X_test)
+        rmse = np.sqrt(mean_squared_error(y_test, pred))
 except:
-    rmse = 0
-
-# -------------------------------
-# DECISION ENGINE
-# -------------------------------
-recommendations = []
-
-if (sim_df["Inventory"] < sim_df["Demand"]).any():
-    recommendations.append("Increase Inventory")
-
-if (sim_df["Reliability"] < 0.7).any():
-    recommendations.append("Switch Supplier")
-
-if (sim_df["Transport_Cost"] > 60).any():
-    recommendations.append("Optimize Transport Route")
-
-if len(recommendations) == 0:
-    recommendations.append("System Stable")
+    pass
 
 # -------------------------------
 # COST ANALYSIS
 # -------------------------------
-original_cost = (df["Transport_Cost"] + df["Product_Cost"]).sum()
-new_cost = (sim_df["Transport_Cost"] + sim_df["Product_Cost"]).sum()
+orig_cost = (original["Transport_Cost"] + original["Product_Cost"]).sum()
+new_cost = (sim["Transport_Cost"] + sim["Product_Cost"]).sum()
 
 # -------------------------------
-# OUTPUT
+# DECISION ENGINE (SMART)
 # -------------------------------
-st.header("📈 Results")
+recommend = []
 
-col1, col2 = st.columns(2)
+if (sim["Inventory"] < sim["Demand"]).any():
+    recommend.append("⚠ Increase Inventory Immediately")
 
-col1.metric("RMSE", round(rmse, 2))
-col1.metric("Original Cost", round(original_cost, 2))
+if (sim["Lead_Time"] > original["Lead_Time"]).any():
+    recommend.append("🚚 Use Faster Transport Route")
 
-col2.metric("New Cost", round(new_cost, 2))
-col2.metric("Cost Change", round(new_cost - original_cost, 2))
+if (sim["Transport_Cost"] > original["Transport_Cost"]).any():
+    recommend.append("💰 Optimize Logistics Cost")
+
+if (sim["Reliability"] < 0.7).any():
+    recommend.append("🔄 Switch to High-Reliability Supplier")
+
+if not recommend:
+    recommend.append("✅ System Operating Optimally")
 
 # -------------------------------
-# GRAPHS
+# KPI DASHBOARD
 # -------------------------------
-st.subheader("Demand vs Inventory")
-st.plotly_chart(px.bar(sim_df, y=["Demand", "Inventory"]))
+st.subheader("📊 Key Metrics")
 
-st.subheader("Cost Comparison")
-st.plotly_chart(px.bar(x=["Original", "New"], y=[original_cost, new_cost]))
+c1,c2,c3 = st.columns(3)
 
-st.subheader("Risk Analysis")
-st.plotly_chart(px.scatter(sim_df, x="Reliability", y="Lead_Time",
-                           color="Risk_Score", size="Inventory"))
+c1.metric("Original Cost", round(orig_cost,2))
+c2.metric("New Cost", round(new_cost,2))
+c3.metric("RMSE", round(rmse,2))
+
+# -------------------------------
+# GRAPH 1: DEMAND COMPARISON
+# -------------------------------
+st.subheader("📈 Demand Impact (Before vs After)")
+
+fig = go.Figure()
+fig.add_trace(go.Bar(name="Original", x=original.index, y=original["Demand"]))
+fig.add_trace(go.Bar(name="After Simulation", x=sim.index, y=sim["Demand"]))
+
+fig.update_layout(barmode='group')
+st.plotly_chart(fig, use_container_width=True)
+
+# -------------------------------
+# GRAPH 2: LEAD TIME CHANGE
+# -------------------------------
+st.subheader("⏱ Lead Time Change")
+
+fig2 = px.line(pd.DataFrame({
+    "Original": original["Lead_Time"],
+    "Simulated": sim["Lead_Time"]
+}))
+st.plotly_chart(fig2, use_container_width=True)
+
+# -------------------------------
+# GRAPH 3: COST IMPACT
+# -------------------------------
+st.subheader("💰 Cost Comparison")
+
+fig3 = px.bar(x=["Original","Simulated"], y=[orig_cost,new_cost])
+st.plotly_chart(fig3, use_container_width=True)
+
+# -------------------------------
+# GRAPH 4: RISK HEATMAP STYLE
+# -------------------------------
+st.subheader("🔥 Risk Visualization")
+
+sim["Risk"] = (1 - sim["Reliability"]) * sim["Lead_Time"]
+
+fig4 = px.scatter(sim, x="Reliability", y="Lead_Time",
+                  size="Inventory", color="Risk",
+                  hover_name="Supplier_ID")
+st.plotly_chart(fig4, use_container_width=True)
 
 # -------------------------------
 # RECOMMENDATIONS
 # -------------------------------
-st.subheader("🧠 Recommendations")
-for r in recommendations:
+st.subheader("🧠 AI Recommendations")
+
+for r in recommend:
     st.success(r)
 
 # -------------------------------
-# DOWNLOAD
+# DOWNLOAD REPORT
 # -------------------------------
-csv = sim_df.to_csv(index=False).encode('utf-8')
-st.download_button("Download Report", csv, "report.csv")
+st.download_button("⬇ Download Report",
+                   sim.to_csv(index=False),
+                   "report.csv")
